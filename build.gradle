@@ -4,7 +4,9 @@ plugins {
 	id 'signing'
 }
 
-sourceCompatibility = 1.11
+sourceCompatibility = 1.17
+targetCompatibility = 1.17
+
 def baseVersion = '3.9.4'
 def baseGroupId = 'io.github.adempiere'
 
@@ -28,22 +30,18 @@ dependencies {
     )
 
 	// Jakarta RESTful Web Services
-	// https://mvnrepository.com/artifact/javax.ws.rs/javax.ws.rs-api
-	implementation 'javax.ws.rs:javax.ws.rs-api:2.1.1'
-
+	implementation "jakarta.ws.rs:jakarta.ws.rs-api:4.0.0"
 	// Jersey core client implementation
-	// https://mvnrepository.com/artifact/  org.glassfish.jersey.core/jersey-client
-	api 'org.glassfish.jersey.core:jersey-client:2.34'
-	// https://mvnrepository.com/artifact/org.glassfish.jersey.inject/jersey-hk2
-	api 'org.glassfish.jersey.inject:jersey-hk2:2.34'
+	implementation 'org.glassfish.jersey.core:jersey-client:4.0.0'
+	implementation 'org.glassfish.jersey.inject:jersey-hk2:4.0.0'
 
 	// JSON in Java
 	// https://mvnrepository.com/artifact/org.json/json
-	api 'org.json:json:20211205'
+	implementation"org.json:json:20250517"
 
     //	ADempiere Core
-    api "${baseGroupId}:base:${baseVersion}"
-	api "${baseGroupId}:project:${baseVersion}"
+    implementation "${baseGroupId}:base:${baseVersion}"
+	implementation "${baseGroupId}:project:${baseVersion}"
 }
 
 sourceSets {
@@ -62,7 +60,8 @@ java {
 
 def entityType = 'ECA46'
 group = "io.github.adempiere"
-version = findProperty("deployVersion") ?: "local-1.0.0"
+version = System.getenv("ADEMPIERE_LIBRARY_VERSION") ?: "local-1.0.0"
+def urlRepository = System.getenv("ERP_LIBRARY_REPO")
 
 jar {
 	manifest {
@@ -79,10 +78,10 @@ publishing {
 		mavenLocal()
 
         maven {
-            url = findProperty("deployPublishUrl") ?: System.properties['deploy.publish_url']
+            url = urlRepository
             credentials {
-                username = findProperty("deployUsername") ?: System.properties['deploy.user']
-                password = findProperty("deployPassword") ?: System.properties['deploy.token']
+                username = System.getenv("GITHUB_DEPLOY_USER") ?: System.properties['deploy.user']
+                password = System.getenv("GITHUB_DEPLOY_TOKEN") ?: System.properties['deploy.token'] 
             }
         }
     }
