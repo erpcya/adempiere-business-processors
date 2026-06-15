@@ -34,6 +34,7 @@ import org.compiere.model.MProcess;
 import org.compiere.model.MRole;
 import org.compiere.model.MScheduler;
 import org.compiere.model.MSchedulerLog;
+import org.compiere.model.MSchedulerPara;
 import org.compiere.model.MUser;
 import org.compiere.print.ReportEngine;
 import org.compiere.process.ProcessInfo;
@@ -63,6 +64,7 @@ public class SchedulerProcessor extends SchedulerProcessorAbstract {
 	Properties 					schedulerContext = new Properties();
 	/**	Initial work time			*/
 	private long 				startWork;
+	private static final String COLUMNNAME_ParameterDefault_To = "ParameterDefault_To";
 	
 	@Override
 	protected void prepare() {
@@ -258,90 +260,124 @@ public class SchedulerProcessor extends SchedulerProcessorAbstract {
 		Arrays.asList(schedulerProcessor.getParameters(false))
 			.forEach(schedulerParameter -> {
 				String variable = schedulerParameter.getParameterDefault();
+				String variableTo = schedulerParameter.get_ValueAsString(COLUMNNAME_ParameterDefault_To);
 				log.fine(schedulerParameter.getColumnName() + " = " + variable);
 				//	Value - Constant/Variable
-				Object value = variable;
-				if (variable == null
-					|| (variable != null && variable.length() == 0)) {
-					value = null;
-				} else if (  variable.indexOf('@') != -1
-						&& variable.indexOf('@') != variable.lastIndexOf('@')) {
-					//	Strip
-					int index = variable.indexOf('@');
-					String columnName = variable.substring(index+1);
-					index = columnName.indexOf('@');
-					if (index != -1) {
-						columnName = columnName.substring(0, index);
-						//	try Env
-						String environment = Env.getContext(schedulerContext, columnName);
-						if (environment == null || environment.length() == 0)
-							environment = Env.getContext(getCtx(), columnName);
-						if (environment.length() == 0) {
-							log.warning(schedulerParameter.getColumnName()
-								+ " - not in environment =" + columnName
-								+ "(" + variable + ")");
-						} else {
-							value = environment;
-						}
-					}
-				}	//	@variable@
-				//	Exists a Value
-				if (value != null) {
-					//	Object Parameter
-					Object parameterOfProcess = null;
-					//	Convert to Type
-					try {
-						if (DisplayType.isNumeric(schedulerParameter.getDisplayType())
-							|| DisplayType.isID(schedulerParameter.getDisplayType())) {
-							BigDecimal decimalValue = null;
-							if (value instanceof BigDecimal)
-								decimalValue = (BigDecimal)value;
-							else if (value instanceof Integer)
-								decimalValue = new BigDecimal (((Integer)value).intValue());
-							else
-								decimalValue = new BigDecimal (value.toString());
-							parameterOfProcess = decimalValue;
-							log.fine(schedulerParameter.getColumnName()
-								+ " = " + variable + " (=" + decimalValue + "=)");
-						} else if (DisplayType.YesNo == schedulerParameter.getDisplayType()) {
-							boolean booleanValue = false;
-							if(value instanceof Boolean) {
-								booleanValue = ((Boolean) value);
-							} else {
-								booleanValue = value.toString().replaceAll("'", "").equals("Y");
-							}
-							parameterOfProcess = booleanValue;
-							log.fine(schedulerParameter.getColumnName()
-									+ " = " + variable + " (=" + booleanValue + "=)");
-						} else if (DisplayType.isDate(schedulerParameter.getDisplayType())) {
-							Timestamp dateValue = null;
-							if (value instanceof Timestamp)
-								dateValue = (Timestamp)value;
-							else
-								dateValue = Timestamp.valueOf(value.toString());
-							parameterOfProcess = dateValue;
-							log.fine(schedulerParameter.getColumnName()
-								+ " = " + variable + " (=" + dateValue + "=)");
-						} else {
-							parameterOfProcess = value.toString().replaceAll("'", "");
-							log.fine(schedulerParameter.getColumnName()
-								+ " = " + variable
-								+ " (=" + value + "=) " + value.getClass().getName());
-						}
-						//	add to builder
-						if (parameterOfProcess != null) {
-							log.fine("ColumnName=" + schedulerParameter.getColumnName() + ", Value=" + parameterOfProcess);
-							builder.withParameter(schedulerParameter.getColumnName(), parameterOfProcess);
-						}
-					}
-					catch (Exception e) {
-						log.warning(schedulerParameter.getColumnName()
-							+ " = " + variable + " (" + value
-							+ ") " + value.getClass().getName()
-							+ " - " + e.getLocalizedMessage());
-					}
+				Object value = parseValue(variable, schedulerParameter);
+				Object valueTo = parseValue(variableTo, schedulerParameter);
+				
+				Object parameterOfProcess = processValue(variable, value, schedulerParameter);
+				Object parameterOfProcessTo = processValue(variableTo, valueTo, schedulerParameter);
+				
+				//	add to builder
+				if (parameterOfProcess != null) {
+					log.fine("ColumnName=" + schedulerParameter.getColumnName() + ", Value=" + parameterOfProcess);
+					if (parameterOfProcessTo != null) {
+						log.fine("ColumnName=" + schedulerParameter.getColumnName() + ", ValueTo=" + parameterOfProcessTo);
+						builder.withParameter(schedulerParameter.getColumnName(), parameterOfProcess, parameterOfProcessTo);
+					}else 
+						builder.withParameter(schedulerParameter.getColumnName(), parameterOfProcess);
+					
 				}
 			});
+	}
+	
+	/**
+	 * Parse Value
+	 * @param variable
+	 * @param schedulerParameter
+	 * @return
+	 */
+	private String parseValue(String variable, MSchedulerPara schedulerParameter) {
+		String value = variable;
+		if (variable == null
+				|| (variable != null && variable.length() == 0)) {
+				value = null;
+			} else if (  variable.indexOf('@') != -1
+					&& variable.indexOf('@') != variable.lastIndexOf('@')) {
+				//	Strip
+				int index = variable.indexOf('@');
+				String columnName = variable.substring(index+1);
+				index = columnName.indexOf('@');
+				if (index != -1) {
+					columnName = columnName.substring(0, index);
+					//	try Env
+					String environment = Env.getContext(schedulerContext, columnName);
+					if (environment == null || environment.length() == 0)
+						environment = Env.getContext(getCtx(), columnName);
+					if (environment.length() == 0) {
+						log.warning(schedulerParameter.getColumnName()
+							+ " - not in environment =" + columnName
+							+ "(" + variable + ")");
+					} else {
+						value = environment;
+					}
+				}
+			}	//	@variable@
+		return value;
+	}
+	
+	/**
+	 * Process Value
+	 * @param variable
+	 * @param value
+	 * @param schedulerParameter
+	 * @return
+	 */
+	private Object processValue (String variable, Object value, MSchedulerPara schedulerParameter ) {
+		//	Object Parameter
+		Object parameterOfProcess = null;
+		if (value != null) {
+
+			//	Convert to Type
+			try {
+				if (DisplayType.isNumeric(schedulerParameter.getDisplayType())
+					|| DisplayType.isID(schedulerParameter.getDisplayType())) {
+					BigDecimal decimalValue = null;
+					if (value instanceof BigDecimal)
+						decimalValue = (BigDecimal)value;
+					else if (value instanceof Integer)
+						decimalValue = new BigDecimal (((Integer)value).intValue());
+					else
+						decimalValue = new BigDecimal (value.toString());
+					parameterOfProcess = decimalValue;
+					log.fine(schedulerParameter.getColumnName()
+						+ " = " + variable + " (=" + decimalValue + "=)");
+				} else if (DisplayType.YesNo == schedulerParameter.getDisplayType()) {
+					boolean booleanValue = false;
+					if(value instanceof Boolean) {
+						booleanValue = ((Boolean) value);
+					} else {
+						booleanValue = value.toString().replaceAll("'", "").equals("Y");
+					}
+					parameterOfProcess = booleanValue;
+					log.fine(schedulerParameter.getColumnName()
+							+ " = " + variable + " (=" + booleanValue + "=)");
+				} else if (DisplayType.isDate(schedulerParameter.getDisplayType())) {
+					Timestamp dateValue = null;
+					if (value instanceof Timestamp)
+						dateValue = (Timestamp)value;
+					else
+						dateValue = Timestamp.valueOf(value.toString());
+					parameterOfProcess = dateValue;
+					log.fine(schedulerParameter.getColumnName()
+						+ " = " + variable + " (=" + dateValue + "=)");
+				} else {
+					parameterOfProcess = value.toString().replaceAll("'", "");
+					log.fine(schedulerParameter.getColumnName()
+						+ " = " + variable
+						+ " (=" + value + "=) " + value.getClass().getName());
+				}
+			}
+			catch (Exception e) {
+				log.warning(schedulerParameter.getColumnName()
+					+ " = " + variable + " (" + value
+					+ ") " + value.getClass().getName()
+					+ " - " + e.getLocalizedMessage());
+			}
+		}
+		
+		return parameterOfProcess;
 	}
 	/**
 	 * 	Get Server Info
