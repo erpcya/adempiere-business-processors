@@ -16,6 +16,12 @@ jobs:
   build-ci:
     name: Publish Project
     runs-on: ubuntu-latest
+    #  Without this the run's own token cannot write a package, and neither can
+    #  any other: a workflow's default permissions are read-only, and the publish
+    #  fails with a 401 that reads as a bad credential rather than a missing grant.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
@@ -28,15 +34,21 @@ jobs:
           java-version: 17
           architecture: x64
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Build with Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: publish
+        run: ./gradlew publish
         env:
           ADEMPIERE_LIBRARY_VERSION: ${{ github.event.release.tag_name }}
-          ERP_LIBRARY_REPO: ${{ secrets.ERP_LIBRARY_REPO }}
+          #  Not passed. This fork publishes to its own packages, and the
+          #  organization's ERP_LIBRARY_REPO names a registry meant for other
+          #  repositories — a configured value that is valid elsewhere, winning over
+          #  a default that is right here, and failing with a 404 that names neither.
           GITHUB_DEPLOY_USER: ${{ github.actor }}
-          GITHUB_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+          #  The run's own token: this publishes to this repository's own
+          #  packages, and the run's token is scoped to exactly that.
+          GITHUB_DEPLOY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.PGP_SECRET }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.PGP_PASSPHRASE }}
           ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.OSSRH_TOKEN }}
