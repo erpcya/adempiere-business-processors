@@ -1,0 +1,139 @@
+# Copy this to .github/workflows/erp-ai-candidate.yml in a library repository whose
+# changes have to be tried by a person before anybody believes them.
+#
+#   erp-ai:candidate   build this pull request and publish it as a release candidate
+#   erp-ai:verified    somebody ran it and says it does what was asked
+#
+# Create both labels in this repository first.
+#
+# Why this exists: every verdict this platform reaches ends at *it compiles*. A
+# repository with no test suite cannot get further on its own, and the analysis says
+# so plainly each time. A candidate is how a person gets to answer the question the
+# platform cannot — and the comment it leaves carries what to check, taken from the
+# analysis rather than invented afterwards.
+#
+# The label removes itself once the build starts. That makes it an instruction —
+# *build one now* — rather than a state, which matters after a rework: the commit
+# changed, so the previous candidate is stale, and a single click asks for a new one.
+# Rebuilding silently on every push would replace the jar underneath a functional
+# consultant in the middle of testing.
+
+name: ERP AI release candidate
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  candidate:
+    if: github.event.label.name == 'erp-ai:candidate'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      # The head of the pull request, by SHA. `pull_request_target` checks out the
+      # base by default, which would publish a candidate of the wrong code under a
+      # version naming the pull request — a lie that compiles.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Take the label off, so it can be applied again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          API: ${{ github.api_url }}
+        run: |
+          curl -sS -X DELETE -H "authorization: Bearer $GH_TOKEN" \
+            "$API/repos/$REPO/issues/$NUMBER/labels/erp-ai:candidate" > /dev/null || true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Publish the candidate
+        id: publish
+        env:
+          # `pr<number>-<sha7>`. It cannot collide with a release tag, and it does not
+          # sort like one, so no version range resolves it by accident — it enters a
+          # deployment only because somebody typed it. It also says what it contains,
+          # which a guessed `1.4.7-rc1` does not: nobody has to decide the next
+          # release number at the moment a candidate is cut.
+          GITHUB_DEPLOY_USER: ${{ github.actor }}
+          GITHUB_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          version="pr${NUMBER}-${SHA:0:7}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          ADEMPIERE_LIBRARY_VERSION="$version" ./gradlew publish
+
+          # The coordinate as published, read from the POM the build just generated
+          # rather than assembled from a convention. A repository's publication block
+          # sets its own groupId, and they are not all the same — one here publishes
+          # under `…adempiere.customizations` while the rest use `…adempiere.tools`.
+          # A coordinate somebody pastes has to be the real one; a plausible wrong one
+          # sends them looking for something that was never published.
+          pom=$(find build/publications -name 'pom-default.xml' | head -1)
+          if [ -n "$pom" ]; then
+            group=$(sed -n 's:.*<groupId>\(.*\)</groupId>.*:\1:p' "$pom" | head -1)
+            artifact=$(sed -n 's:.*<artifactId>\(.*\)</artifactId>.*:\1:p' "$pom" | head -1)
+            [ -n "$group" ] && [ -n "$artifact" ] \
+              && echo "coordinate=$group:$artifact:$version" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say where it is and what to check
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          VERSION: ${{ steps.publish.outputs.version }}
+          COORDINATE: ${{ steps.publish.outputs.coordinate }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          SERVICE: ${{ secrets.ERP_AI_URL }}
+          SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The service writes the comment rather than this workflow, because what to
+          # check lives in the analysis and the analysis lives there.
+          jq -n --arg repo "$REPO" --argjson num "$NUMBER" \
+                --arg version "$VERSION" --arg sha "$SHA" --arg coord "$COORDINATE" \
+             '{repository: $repo, pull_number: $num, version: $version, sha: $sha}
+              + (if $coord == "" then {} else {coordinate: $coord} end)' \
+            | curl -sS -X POST "$SERVICE/candidate" \
+                -H "Authorization: Bearer $SERVICE_TOKEN" \
+                -H 'content-type: application/json' --data @-
+
+  # This label does not remove itself, and the difference is the point. `candidate`
+  # and the review labels are instructions — *do this now* — so they come off once
+  # done. `verified` is a state: it says this change has been run by a person and
+  # found to do what was asked, and that stays true until the change moves.
+  verified:
+    if: github.event.label.name == 'erp-ai:verified'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Record who verified it
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          # Whoever applied the label. A verification with nobody's name on it is a
+          # rumour, and this is the one claim in the whole route that rests on a
+          # person rather than on a check.
+          WHO: ${{ github.event.sender.login }}
+          SERVICE: ${{ secrets.ERP_AI_URL }}
+          SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
+        run: |
+          set -euo pipefail
+          jq -n --arg repo "$REPO" --argjson num "$NUMBER" --arg by "$WHO" \
+             '{repository: $repo, pull_number: $num, by: $by}' \
+            | curl -sS -X POST "$SERVICE/verified" \
+                -H "Authorization: Bearer $SERVICE_TOKEN" \
+                -H 'content-type: application/json' --data @-
