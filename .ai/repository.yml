@@ -1,0 +1,24 @@
+# Read by the ERP AI knowledge platform. Declarative, not authoritative: an agent
+# derives the classification from evidence and reports a disagreement with this
+# file as an UNKNOWN rather than resolving it. Section 1 of .ai/knowledge.md is
+# the home of this fact; this file serves an agent that has no contract yet.
+type: Library
+entityType: ECA46
+owner: ERP Consultores y Asociados
+
+# Forked so this platform can live here: a marker, a workflow and a contract
+# cannot be added to a repository somebody else owns. Forking does not change
+# what this is — a forked Library is still a Library — but it changes what may
+# safely be done to it. See standards/repository-classification-v1.md.
+upstream: https://github.com/adempiere/adempiere-business-processors
+
+# The words people use for this when they report something or ask a question.
+# Domain nouns, not class names and not this repository's own name.
+terms:
+  - proceso programado
+  - tarea programada
+  - planificador
+  - alerta
+
+# How this is built comes from standards/build-profiles.yml, matched by the
+# gradle wrapper in this tree. Nothing to declare unless this repository differs.
