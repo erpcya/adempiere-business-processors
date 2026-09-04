@@ -2,6 +2,11 @@
 # derives the classification from evidence and reports a disagreement with this
 # file as an UNKNOWN rather than resolving it. Section 1 of .ai/knowledge.md is
 # the home of this fact; this file serves an agent that has no contract yet.
+# Which product this repository is part of. Asked before the type,
+# because it decides whether this is a candidate at all: a question
+# about how ADempiere calculates average cost is not a question about
+# an edge agent written in Go. See standards/repository-marker-v1 §5.
+product: adempiere
 type: Library
 entityType: ECA46
 owner: ERP Consultores y Asociados
