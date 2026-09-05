@@ -10,10 +10,11 @@
 | Language and target | Java; `sourceCompatibility = 1.17`, `targetCompatibility = 1.17` |
 | Build / runtime | Gradle wrapper 7.3.3; CI builds with JDK 17 |
 | Published artifact | `io.github.adempiere:adempiere-business-processors`; default publish URL `https://maven.pkg.github.com/erpcya/adempiere-business-processors` |
-| Version | Build version from `ADEMPIERE_LIBRARY_VERSION`; default `local-1.0.0`; tags include `ERP-1.2.1`, `ERP-1.2.0`, `ERP-1.1.9` |
+| Version | Build version from `ADEMPIERE_LIBRARY_VERSION`; default `local-1.0.0`; tags include `ERP-1.2.2`, `ERP-1.2.1`, `ERP-1.2.0`, `ERP-1.1.9` |
 | License | GNU General Public License, version 2 |
 | Root package or module | `org.spin.eca46` |
 | Entity type | `ECA46` |
+| Default branch | `erpya` |
 | Upstream | `https://github.com/adempiere/adempiere-business-processors` |
 | Owner | ERP Consultores y Asociados |
 
@@ -40,6 +41,7 @@ This is a fork of upstream `adempiere-business-processors`. Local work happens o
 ## 3. Architecture
 
 ```text
+.ai/                       repository marker and original knowledge contract
 src/main/java/org/spin/eca46/
   process/                 ADempiere process implementations
   setup/                   Setup definition for dKron registration
@@ -48,6 +50,7 @@ xml/migration/             ADempiere dictionary migrations using ECA46
 .github/workflows/         CI, publish, and platform review workflows
 gradle/wrapper/            Gradle wrapper
 build.gradle               Build and publication configuration
+settings.gradle            Gradle project name
 ```
 
 Each processor follows the same pattern:
@@ -88,7 +91,7 @@ The evidence lists no updates to records that existed before this repository's o
 | `org.glassfish.jersey.core:jersey-client:4.0.0` | Compile/runtime | REST client implementation for dKron |
 | `org.glassfish.jersey.inject:jersey-hk2:4.0.0` | Compile/runtime | Jersey HK2 injection support |
 | `org.json:json:20250517` | Compile/runtime | JSON construction for dKron job definitions |
-| `fileTree(dir: 'lib')` | Compile/runtime via `api` | Local jar dependencies; no files under `lib/` are listed in the tracked-file evidence |
+| `fileTree(dir: 'lib')` | Compile/runtime via `api` | Local jar dependencies; the tracked-file evidence does not list any files under `lib/` |
 | dKron HTTP API | Runtime/integration | External scheduler receiving job definitions and executing HTTP jobs |
 | ADempiere backend service | Runtime/integration | Endpoint called by dKron; configured through `AD_AppRegistration` parameter `adempiere_endpoint` |
 | Gradle wrapper 7.3.3 / JDK 17 | Build | Defines the build tool and target runtime |
@@ -158,8 +161,10 @@ Changes are permissible when they preserve the published artifact contract and t
 |---|---|---|
 | `DKron.exportProcessor` checks `response.getStatus() != 201 \|\| response.getStatus() != 200`, which is true for every possible status. | Every dKron response, including success, is treated as an error path and read as an error result. | Correct the condition to `response.getStatus() != 201 && response.getStatus() != 200`. |
 | `Request.getProcessorParameterId()` returns `processor.getR_RequestType_ID()` while its identifier and parameter code are based on `R_RequestProcessor_ID`. | Exported request-processor jobs may call the ADempiere backend with the wrong request type identifier. | Verify the intended request processor parameter and correct it before relying on request-processor export. |
-| `Workflow.getProcessorParameterCode()` returns `RequestProcessor.R_REQUESTPROCESSOR_ID` instead of the workflow processor parameter code. | Exported workflow-processor jobs may send the wrong parameter code. | Verify and set the workflow processor parameter code to match the ADempiere process parameter. |
+| `Workflow.getProcessorParameterCode()` returns `RequestProcessor.R_REQUESTPROCESSOR_ID` instead of the workflow processor parameter code. | The current `DKron` exporter does not use this method when constructing job URLs, but any consumer of the SPI receives the wrong parameter code for workflow processors. | Verify and set the workflow processor parameter code to match the ADempiere process parameter. |
 | `README.md` advertises Java 11, but `build.gradle` and CI target Java 17. | Users on Java 11 may attempt the library and fail at build or runtime. | Update the README requirements and Java badge to 17. |
+| `README.md` requires Gradle 8.0.1 or later, but `gradle/wrapper/gradle-wrapper.properties` distributes Gradle 7.3.3. | The documented Gradle requirement is inaccurate; the wrapper downloads 7.3.3 regardless of a locally installed Gradle 8. | Align the README requirement with wrapper 7.3.3, or upgrade the wrapper intentionally and update the README. |
+| `.ai/repository.yml` contains a comment describing the declared type as non-authoritative and instructing agents to derive classification from evidence. | This conflicts with `repository-classification-v1`; an agent reading only the marker may re-derive the type or report a false disagreement instead of treating `type: Library` as authoritative. | Treat `type: Library` as authoritative as required by the classification standard; correct the obsolete marker comment. |
 | `CreateDKron` creates a default registration with host `http://localhost` and port `8080`. | A setup not adjusted after creation would export to a non-existent or wrong dKron instance. | Treat the created registration as a placeholder and set the real host/port in `AD_AppRegistration`. |
 | Publish configuration relies on environment/secrets for GitHub Packages and signing. | Misconfigured secrets can cause publish failures or unsigned artifacts. | Configure `GITHUB_DEPLOY_TOKEN`, signing properties, and Sonatype properties in GitHub Actions secrets rather than files. |
 
@@ -171,7 +176,9 @@ The repository is a Java 17 library built with Gradle wrapper 7.3.3, published t
 
 It provides eight sequential dictionary migrations under `xml/migration` using entity type `ECA46`, creating entity type, process, menu, form, application support, setup, parameter, and reference list records. The migration evidence records no modifications to pre-existing records.
 
-Known current gaps and defects include: no evidenced automated test suite; the dKron response validation bug; request and workflow export parameter mismatches; README/badge Java mismatch; tracked IDE metadata; and a default localhost dKron registration placeholder.
+The repository tracks `.ai/knowledge.md` and `.ai/repository.yml`. Local work is on the default branch `erpya`.
+
+Known current gaps and defects include: no evidenced automated test suite; the dKron response validation bug; request and workflow export parameter mismatches; README Java and Gradle requirement mismatches; tracked IDE metadata; a default localhost dKron registration placeholder; and an obsolete marker comment incompatible with the current classification standard.
 
 ---
 
@@ -180,4 +187,4 @@ Known current gaps and defects include: no evidenced automated test suite; the d
 - The allowed identifier range for `ECA46` is not declared in this repository's `.ai/repository.yml`, contract, or migration evidence.
 - The contents of the `lib/` directory referenced by `build.gradle` are not listed in the evidence; whether it exists or contains jars could not be confirmed from the tracked files shown.
 - Whether the request and workflow processor parameter code/value mismatches are intentional workarounds or defects is not documented; only the source inconsistency is visible.
-- Whether the original `.ai/knowledge.md` exists inside this repository could not be confirmed from the supplied evidence.
+- The literal authorization header string constructed in `DKron.getRequestDefinition()` is masked in the supplied evidence; the exact header format sent to dKron could not be confirmed.
