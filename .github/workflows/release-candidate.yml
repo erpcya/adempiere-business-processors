@@ -73,7 +73,23 @@ jobs:
           set -euo pipefail
           version="pr${NUMBER}-${SHA:0:7}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          ADEMPIERE_LIBRARY_VERSION="$version" ./gradlew publish
+          # `publish` is not idempotent and the label is. A version is
+          # `pr<number>-<sha7>`, so labelling the same pull request again with no new
+          # commits asks GitHub Packages to overwrite a version that already exists,
+          # and it answers 409. The job then died here — before the coordinate,
+          # before the comment — so pressing the label a second time produced
+          # silence, which reads exactly like a label that does nothing.
+          #
+          # A 409 says the artifact is already there, built from this very commit:
+          # the sha is in the version, so the same version is the same code. That is
+          # a candidate. Report it rather than failing over having it already.
+          if ! out=$(ADEMPIERE_LIBRARY_VERSION="$version" ./gradlew publish 2>&1); then
+            printf '%s\n' "$out"
+            printf '%s' "$out" | grep -q 'status code 409' || exit 1
+            echo "::notice::$version was published from this commit already"
+          else
+            printf '%s\n' "$out"
+          fi
 
           # The coordinate as published, read from the POM the build just generated
           # rather than assembled from a convention. A repository's publication block
@@ -81,12 +97,30 @@ jobs:
           # under `…adempiere.customizations` while the rest use `…adempiere.tools`.
           # A coordinate somebody pastes has to be the real one; a plausible wrong one
           # sends them looking for something that was never published.
-          pom=$(find build/publications -name 'pom-default.xml' | head -1)
-          if [ -n "$pom" ]; then
-            group=$(sed -n 's:.*<groupId>\(.*\)</groupId>.*:\1:p' "$pom" | head -1)
-            artifact=$(sed -n 's:.*<artifactId>\(.*\)</artifactId>.*:\1:p' "$pom" | head -1)
-            [ -n "$group" ] && [ -n "$artifact" ] \
-              && echo "coordinate=$group:$artifact:$version" >> "$GITHUB_OUTPUT"
+          #
+          # Every subproject's, not the root's. `find build/publications` looked only
+          # in the top-level build directory, so a multi-project repository reported
+          # its root aggregate — `com.erpya:adempiere_patch` — while what a consumer
+          # actually declares is `com.erpya:adempiere_patch.erpya_libs`. One
+          # publication is a coordinate; twenty-seven are a version, and calling one
+          # of them "the" coordinate is the same guess this block exists to stop.
+          #
+          # groupId and artifactId are read from above <dependencies>, where a
+          # project's own live. They come first in every POM Gradle writes here, so
+          # this changes no answer today and stops depending on that staying true.
+          coords=$(find . -path '*/build/publications/*' -name 'pom-default.xml' \
+                   | sort | while read -r pom; do
+            own=$(sed -n '1,/<dependencies>/p' "$pom")
+            g=$(printf '%s' "$own" | sed -n 's:.*<groupId>\(.*\)</groupId>.*:\1:p' | head -1)
+            a=$(printf '%s' "$own" | sed -n 's:.*<artifactId>\(.*\)</artifactId>.*:\1:p' | head -1)
+            [ -n "$g" ] && [ -n "$a" ] && printf '%s:%s:%s\n' "$g" "$a" "$version"
+          done)
+          n=$(printf '%s' "$coords" | grep -c . || true)
+          if [ "$n" = 1 ]; then
+            echo "coordinate=$coords" >> "$GITHUB_OUTPUT"
+          elif [ "$n" -gt 1 ]; then
+            { echo 'coordinates<<ERPAI_EOF'; printf '%s\n' "$coords"
+              echo 'ERPAI_EOF'; } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Say where it is and what to check
@@ -95,6 +129,7 @@ jobs:
           NUMBER: ${{ github.event.pull_request.number }}
           VERSION: ${{ steps.publish.outputs.version }}
           COORDINATE: ${{ steps.publish.outputs.coordinate }}
+          COORDINATES: ${{ steps.publish.outputs.coordinates }}
           SHA: ${{ github.event.pull_request.head.sha }}
           SERVICE: ${{ secrets.ERP_AI_URL }}
           SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
@@ -104,8 +139,11 @@ jobs:
           # check lives in the analysis and the analysis lives there.
           jq -n --arg repo "$REPO" --argjson num "$NUMBER" \
                 --arg version "$VERSION" --arg sha "$SHA" --arg coord "$COORDINATE" \
+                --arg coords "$COORDINATES" \
              '{repository: $repo, pull_number: $num, version: $version, sha: $sha}
-              + (if $coord == "" then {} else {coordinate: $coord} end)' \
+              + (if $coord  == "" then {} else {coordinate: $coord} end)
+              + (if $coords == "" then {} else
+                 {coordinates: ($coords | split("\n") | map(select(length > 0)))} end)' \
             | curl -sS -X POST "$SERVICE/candidate" \
                 -H "Authorization: Bearer $SERVICE_TOKEN" \
                 -H 'content-type: application/json' --data @-
