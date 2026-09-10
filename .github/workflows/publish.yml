@@ -53,3 +53,38 @@ jobs:
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.PGP_PASSPHRASE }}
           ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.OSSRH_TOKEN }}
           ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.OSSRH_USERNAME }}
+
+# Managed by Jarvis. Do not edit this block manually.
+  notify-jarvis-result:
+    name: Informar resultado de publicación a Jarvis
+    # Wait for every pre-existing job and report their aggregate real result.
+    if: ${{ always() && github.event_name == 'release' }}
+    needs: [build-ci]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Enviar resultado real a Jarvis
+        env:
+          JARVIS_ACTION_RESULT_URL: "http://app-server-4.erpcya.com:3000/webhook/action-result"
+          JARVIS_RELEASE_TAG: "${{ github.event.release.tag_name }}"
+          JARVIS_NEEDS_JSON: '${{ toJSON(needs) }}'
+        run: |
+          JARVIS_STATUS=$(jq -r '
+            if all(.[]; .result == "success") then "success"
+            elif any(.[]; .result == "failure") then "failure"
+            elif any(.[]; .result == "cancelled") then "cancelled"
+            else "skipped"
+            end
+          ' <<< "$JARVIS_NEEDS_JSON")
+
+          payload=$(jq -nc \
+            --arg repo "${{ github.repository }}" \
+            --arg status "$JARVIS_STATUS" \
+            --arg tag "$JARVIS_RELEASE_TAG" \
+            --arg run_id "${{ github.run_id }}" \
+            '{repo: $repo, status: $status, tag: $tag, run_id: $run_id}')
+
+          curl --fail-with-body --retry 2 --retry-delay 2 \
+            -X POST "$JARVIS_ACTION_RESULT_URL" \
+            -H "Content-Type: application/json" \
+            --data "$payload"
