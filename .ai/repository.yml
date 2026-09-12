@@ -27,3 +27,13 @@ terms:
 
 # How this is built comes from standards/build-profiles.yml, matched by the
 # gradle wrapper in this tree. Nothing to declare unless this repository differs.
+
+# What a merge publishes, and under what name. The tag is used verbatim as the
+# artifact's version by publish.yml, and GitHub Packages will not overwrite one,
+# so it is declared here rather than inferred. See organization/DR-0005 and
+# standards/repository-marker-v1 §9.
+release:
+  tag: "ERP-{major}.{minor}.{patch}"
+  # The patch after which the next release rolls into the minor. A backstop, not
+  # a rhythm: a minor is asked for with `erp-ai:minor` on the pull request.
+  rolls_at: 99
