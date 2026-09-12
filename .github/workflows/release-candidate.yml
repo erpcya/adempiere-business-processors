@@ -22,7 +22,11 @@ name: ERP AI release candidate
 
 on:
   pull_request_target:
-    types: [labeled]
+    # `closed` as well as `labeled`, because a merge is the other thing that
+    # happens to a pull request and this platform has to hear about it. The label
+    # jobs stay unaffected: on a `closed` event `github.event.label` does not
+    # exist, so every `github.event.label.name ==` below is false.
+    types: [labeled, closed]
 
 jobs:
   candidate:
@@ -145,6 +149,36 @@ jobs:
               + (if $coords == "" then {} else
                  {coordinates: ($coords | split("\n") | map(select(length > 0)))} end)' \
             | curl -sS -X POST "$SERVICE/candidate" \
+                -H "Authorization: Bearer $SERVICE_TOKEN" \
+                -H 'content-type: application/json' --data @-
+
+  # A merge is not a label, and it is the only event here nobody applies on purpose.
+  # Publishing was already automatic — `publish.yml` fires on a release and takes the
+  # tag verbatim as the version — but cutting the release was by hand, so an issue
+  # could only ever be closed as "merged", which is not something a reporter can
+  # install.
+  #
+  # This job says only that it landed. What the next version is called is read from
+  # the repository's marker and the release before it, by the service, because a
+  # version published under a guessed name cannot be taken back. See
+  # organization/DR-0005.
+  merged:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say that it landed
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SERVICE: ${{ secrets.ERP_AI_URL }}
+          SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
+        run: |
+          set -euo pipefail
+          jq -n --arg repo "$REPO" --argjson num "$NUMBER" \
+             '{repository: $repo, pull_number: $num}' \
+            | curl -sS -X POST "$SERVICE/merged" \
                 -H "Authorization: Bearer $SERVICE_TOKEN" \
                 -H 'content-type: application/json' --data @-
 
