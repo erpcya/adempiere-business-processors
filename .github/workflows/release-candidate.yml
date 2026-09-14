@@ -33,16 +33,64 @@ jobs:
     if: github.event.label.name == 'erp-ai:candidate'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # `write` because of the merge below. It was `read`, which was enough while a
+      # candidate was built from wherever the branch happened to be.
+      contents: write
       packages: write
       pull-requests: write
     steps:
-      # The head of the pull request, by SHA. `pull_request_target` checks out the
-      # base by default, which would publish a candidate of the wrong code under a
-      # version naming the pull request — a lie that compiles.
+      # A branch is a snapshot of the base at the moment it was cut, and it does not
+      # follow it afterwards. payment-customizations#2 was cut on 28 August and its
+      # candidate built from that day's tree; by mid-September the base had moved
+      # nineteen commits and four releases, so installing that candidate meant
+      # running the change against an ERP missing all of them — and if it misbehaved,
+      # nothing said whether the change or the gap was at fault.
+      #
+      # So the base comes in first. A candidate is then "this change on what it will
+      # land on", which is what anybody installing one assumes it already was.
+      #
+      # It also makes the version honest. `pr<number>-<sha7>` is the same string
+      # while the branch does not move, so re-labelling after the base advanced
+      # republished a version that already existed; now the tree is different and so
+      # is the name.
+      - name: Bring the branch up to date with what it will land on
+        id: tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          API: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          body=$(jq -n --arg b "$BRANCH" --arg h "$BASE" \
+            '{base: $b, head: $h,
+              commit_message: ("merge " + $h + " into " + $b +
+                               ", so the candidate is built on what it lands on")}')
+          code=$(curl -sS -o merge.json -w '%{http_code}' -X POST \
+            -H "authorization: Bearer $GH_TOKEN" \
+            -H 'accept: application/vnd.github+json' \
+            "$API/repos/$REPO/merges" -d "$body")
+          case "$code" in
+            201) sha=$(jq -r .sha merge.json)
+                 echo "merged $BASE into $BRANCH" ;;
+            204) sha="$SHA"
+                 echo "$BRANCH already carries $BASE" ;;
+            409) echo "::error::$BASE cannot be merged into $BRANCH without resolving a conflict. The candidate would be built on a tree this change will never land on. Resolve it on the branch and label again."
+                 exit 1 ;;
+            *)   cat merge.json; exit 1 ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          rm -f merge.json
+
+      # The head of the pull request, by SHA — the one the step above settled.
+      # `pull_request_target` checks out the base by default, which would publish a
+      # candidate of the wrong code under a version naming the pull request: a lie
+      # that compiles.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.tree.outputs.sha }}
 
       - name: Take the label off, so it can be applied again
         env:
@@ -71,7 +119,7 @@ jobs:
           # release number at the moment a candidate is cut.
           GITHUB_DEPLOY_USER: ${{ github.actor }}
           GITHUB_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          SHA: ${{ steps.tree.outputs.sha }}
           NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
@@ -134,7 +182,7 @@ jobs:
           VERSION: ${{ steps.publish.outputs.version }}
           COORDINATE: ${{ steps.publish.outputs.coordinate }}
           COORDINATES: ${{ steps.publish.outputs.coordinates }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          SHA: ${{ steps.tree.outputs.sha }}
           SERVICE: ${{ secrets.ERP_AI_URL }}
           SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
         run: |
