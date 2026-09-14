@@ -102,6 +102,51 @@ jobs:
           curl -sS -X DELETE -H "authorization: Bearer $GH_TOKEN" \
             "$API/repos/$REPO/issues/$NUMBER/labels/erp-ai:candidate" > /dev/null || true
 
+      # The label has just removed itself and the comment is minutes away — twelve of
+      # them on adempiere_patch, which publishes twenty-seven artifacts one after
+      # another. For that whole gap the pull request looks exactly as it would if the
+      # label had done nothing, which is what somebody watching it concludes.
+      #
+      # The platform says this about every other silence it produces and did not say
+      # it about its own: a label that quietly does nothing is indistinguishable from
+      # a label that is still working.
+      #
+      # Deleted once the real comment lands, so a thread keeps one comment per
+      # candidate rather than two. If the publish fails, or the service cannot be
+      # told, this stays — and then it is the record that something started and did
+      # not finish, which is the case that most needed a mark.
+      #
+      # Signed like everything else the platform writes. `ours()` reads that marker
+      # to keep the platform's words out of a person's, and a comment without it is
+      # read back as somebody's observation — as a verification's notes, or as a
+      # reviewer's objection.
+      - name: Say that it started, until it can say where it is
+        id: notice
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ steps.tree.outputs.sha }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          API: ${{ github.api_url }}
+        run: |
+          set -euo pipefail
+          jq -n --arg sha "${SHA:0:7}" --arg run "$RUN" '{body: (
+            "<!-- erp-ai:written-by-the-platform -->\n"
+            + "<!-- erp-ai:building -->\n"
+            + "### Construyendo el candidato desde `" + $sha + "`\n\n"
+            + "Publicar tarda entre uno y doce minutos según el repositorio, y la "
+            + "etiqueta ya se quitó sola para que puedas volver a aplicarla. Este "
+            + "aviso desaparece cuando llegue el comentario con la coordenada y qué "
+            + "probar.\n\n"
+            + "Si sigue aquí y no llegó nada, la construcción falló o no se pudo "
+            + "avisar: [la ejecución lo dice](" + $run + ").")}' > notice.json
+          id=$(curl -sS -X POST -H "authorization: Bearer $GH_TOKEN" \
+                 -H 'content-type: application/json' --data @notice.json \
+                 "$API/repos/$REPO/issues/$NUMBER/comments" | jq -r '.id // empty')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -119,6 +164,22 @@ jobs:
           # release number at the moment a candidate is cut.
           GITHUB_DEPLOY_USER: ${{ github.actor }}
           GITHUB_DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+          # The same two credentials again, as Gradle project properties, because the
+          # repositories do not agree on how their publishing block reads them. Most
+          # read the environment; `withholding-engine` reads
+          # `findProperty("deployUsername")` and takes its repository URL the same
+          # way, deliberately — its build script refuses to default the URL, so that
+          # a job publishing to Sonatype cannot publish to GitHub Packages by
+          # accident. Handed only the environment, that build found no username, no
+          # password and no URL, and the candidate failed at the publish step.
+          #
+          # So the job says where it publishes, which is what that build script asks
+          # for. `ORG_GRADLE_PROJECT_x` is how Gradle reads `x` as a project
+          # property. Repositories reading the environment are unaffected: they never
+          # look these up.
+          ORG_GRADLE_PROJECT_deployUsername: ${{ github.actor }}
+          ORG_GRADLE_PROJECT_deployPassword: ${{ secrets.DEPLOY_TOKEN }}
+          ORG_GRADLE_PROJECT_deployPublishUrl: https://maven.pkg.github.com/${{ github.repository }}
           SHA: ${{ steps.tree.outputs.sha }}
           NUMBER: ${{ github.event.pull_request.number }}
         run: |
@@ -185,8 +246,51 @@ jobs:
           SHA: ${{ steps.tree.outputs.sha }}
           SERVICE: ${{ secrets.ERP_AI_URL }}
           SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
+          NOTICE: ${{ steps.notice.outputs.id }}
+          GH_TOKEN: ${{ github.token }}
+          API: ${{ github.api_url }}
         run: |
           set -euo pipefail
+          # The service is the only reader of this, and a POST it never received is
+          # a candidate, a merge or a verification that happened and that nobody was
+          # told about. `curl -sS` reports success on a 502: it made the request and
+          # got an answer, and the answer being "the service is down" is not
+          # something curl treats as its problem.
+          #
+          # erpya/material-management-improvements#6 is what that looks like. The
+          # library published as `pr6-80f3f6e`, the service was restarting, the POST
+          # came back 502, the run went green, and the pull request sat there with a
+          # candidate on a registry that nobody had been told existed.
+          #
+          # So: a 5xx or a dropped connection is retried, because the service
+          # restarts on every deploy and that is a second, not a failure. Anything
+          # else, and a retry that runs out, turns the run red — the candidate is
+          # already published by then, and a red run is the only thing left that can
+          # say so.
+          say() {
+            local path="$1" attempt=0 code
+            while : ; do
+              code=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+                       "$SERVICE$path" \
+                       -H "Authorization: Bearer $SERVICE_TOKEN" \
+                       -H 'content-type: application/json' \
+                       --data @payload.json) || code=000
+              cat response.json 2>/dev/null || true
+              echo
+              case "$code" in
+                2*) return 0 ;;
+                000|429|5*) ;;
+                *) echo "::error::$path answered $code"; return 1 ;;
+              esac
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 5 ]; then
+                echo "::error::$path answered $code, $attempt times"
+                return 1
+              fi
+              sleep $((attempt * 10))
+            done
+          }
+
           # The service writes the comment rather than this workflow, because what to
           # check lives in the analysis and the analysis lives there.
           jq -n --arg repo "$REPO" --argjson num "$NUMBER" \
@@ -196,9 +300,16 @@ jobs:
               + (if $coord  == "" then {} else {coordinate: $coord} end)
               + (if $coords == "" then {} else
                  {coordinates: ($coords | split("\n") | map(select(length > 0)))} end)' \
-            | curl -sS -X POST "$SERVICE/candidate" \
-                -H "Authorization: Bearer $SERVICE_TOKEN" \
-                -H 'content-type: application/json' --data @-
+            > payload.json
+          say /candidate
+
+          # The notice has been replaced by the thing it stood in for. Left alone it
+          # would double every candidate thread; removed before the POST it would
+          # leave nothing behind in the one case where the POST is what failed.
+          if [ -n "${NOTICE:-}" ]; then
+            curl -sS -X DELETE -H "authorization: Bearer $GH_TOKEN" \
+              "$API/repos/$REPO/issues/comments/$NOTICE" > /dev/null || true
+          fi
 
   # A merge is not a label, and it is the only event here nobody applies on purpose.
   # Publishing was already automatic — `publish.yml` fires on a release and takes the
@@ -224,11 +335,49 @@ jobs:
           SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
         run: |
           set -euo pipefail
+          # The service is the only reader of this, and a POST it never received is
+          # a candidate, a merge or a verification that happened and that nobody was
+          # told about. `curl -sS` reports success on a 502: it made the request and
+          # got an answer, and the answer being "the service is down" is not
+          # something curl treats as its problem.
+          #
+          # erpya/material-management-improvements#6 is what that looks like. The
+          # library published as `pr6-80f3f6e`, the service was restarting, the POST
+          # came back 502, the run went green, and the pull request sat there with a
+          # candidate on a registry that nobody had been told existed.
+          #
+          # So: a 5xx or a dropped connection is retried, because the service
+          # restarts on every deploy and that is a second, not a failure. Anything
+          # else, and a retry that runs out, turns the run red — the candidate is
+          # already published by then, and a red run is the only thing left that can
+          # say so.
+          say() {
+            local path="$1" attempt=0 code
+            while : ; do
+              code=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+                       "$SERVICE$path" \
+                       -H "Authorization: Bearer $SERVICE_TOKEN" \
+                       -H 'content-type: application/json' \
+                       --data @payload.json) || code=000
+              cat response.json 2>/dev/null || true
+              echo
+              case "$code" in
+                2*) return 0 ;;
+                000|429|5*) ;;
+                *) echo "::error::$path answered $code"; return 1 ;;
+              esac
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 5 ]; then
+                echo "::error::$path answered $code, $attempt times"
+                return 1
+              fi
+              sleep $((attempt * 10))
+            done
+          }
+
           jq -n --arg repo "$REPO" --argjson num "$NUMBER" \
-             '{repository: $repo, pull_number: $num}' \
-            | curl -sS -X POST "$SERVICE/merged" \
-                -H "Authorization: Bearer $SERVICE_TOKEN" \
-                -H 'content-type: application/json' --data @-
+             '{repository: $repo, pull_number: $num}' > payload.json
+          say /merged
 
   # This label does not remove itself, and the difference is the point. `candidate`
   # and the review labels are instructions — *do this now* — so they come off once
@@ -252,8 +401,46 @@ jobs:
           SERVICE_TOKEN: ${{ secrets.ERP_AI_TOKEN }}
         run: |
           set -euo pipefail
+          # The service is the only reader of this, and a POST it never received is
+          # a candidate, a merge or a verification that happened and that nobody was
+          # told about. `curl -sS` reports success on a 502: it made the request and
+          # got an answer, and the answer being "the service is down" is not
+          # something curl treats as its problem.
+          #
+          # erpya/material-management-improvements#6 is what that looks like. The
+          # library published as `pr6-80f3f6e`, the service was restarting, the POST
+          # came back 502, the run went green, and the pull request sat there with a
+          # candidate on a registry that nobody had been told existed.
+          #
+          # So: a 5xx or a dropped connection is retried, because the service
+          # restarts on every deploy and that is a second, not a failure. Anything
+          # else, and a retry that runs out, turns the run red — the candidate is
+          # already published by then, and a red run is the only thing left that can
+          # say so.
+          say() {
+            local path="$1" attempt=0 code
+            while : ; do
+              code=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+                       "$SERVICE$path" \
+                       -H "Authorization: Bearer $SERVICE_TOKEN" \
+                       -H 'content-type: application/json' \
+                       --data @payload.json) || code=000
+              cat response.json 2>/dev/null || true
+              echo
+              case "$code" in
+                2*) return 0 ;;
+                000|429|5*) ;;
+                *) echo "::error::$path answered $code"; return 1 ;;
+              esac
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 5 ]; then
+                echo "::error::$path answered $code, $attempt times"
+                return 1
+              fi
+              sleep $((attempt * 10))
+            done
+          }
+
           jq -n --arg repo "$REPO" --argjson num "$NUMBER" --arg by "$WHO" \
-             '{repository: $repo, pull_number: $num, by: $by}' \
-            | curl -sS -X POST "$SERVICE/verified" \
-                -H "Authorization: Bearer $SERVICE_TOKEN" \
-                -H 'content-type: application/json' --data @-
+             '{repository: $repo, pull_number: $num, by: $by}' > payload.json
+          say /verified
