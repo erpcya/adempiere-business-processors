@@ -36,3 +36,12 @@ release:
   # The patch after which the next release rolls into the minor. A backstop, not
   # a rhythm: a minor is asked for with `erp-ai:minor` on the pull request.
   rolls_at: 99
+
+# Dónde viven las migraciones de diccionario de este repositorio. Declarado
+# y no descubierto: un directorio lleno de XML no es evidentemente un
+# directorio de migraciones, y servirle a un cliente algo que no lo es es
+# peor que no servirle nada. El orden aquí no significa nada — lo que ordena
+# las migraciones es el `SeqNo` que cada fichero declara. Ver
+# standards/repository-marker-v1 §10.
+migrations:
+  - xml/migration
