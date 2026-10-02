@@ -57,7 +57,9 @@ jobs:
 # Managed by Jarvis. Do not edit this block manually.
   notify-jarvis-result:
     name: Informar resultado de publicación a Jarvis
-    # Wait for every pre-existing job and report their aggregate real result.
+    # Wait for every pre-existing job. Dependency delivery depends on the
+    # artifact being published to at least one registry, not every optional
+    # mirror being healthy.
     if: ${{ always() && github.event_name == 'release' }}
     needs: [build-ci]
     runs-on: ubuntu-latest
@@ -70,11 +72,23 @@ jobs:
           JARVIS_NEEDS_JSON: '${{ toJSON(needs) }}'
         run: |
           JARVIS_STATUS=$(jq -r '
-            if all(.[]; .result == "success") then "success"
-            elif any(.[]; .result == "failure") then "failure"
-            elif any(.[]; .result == "cancelled") then "cancelled"
-            else "skipped"
-            end
+            def results: [.[] | .result];
+            def publisher_results:
+              [to_entries[]
+                | select(.key | test("(^|[-_])(publish|deploy|upload)([-_]|$)"; "i"))
+                | .value.result];
+            def aggregate_status($items):
+              if ($items | length) == 0 then "skipped"
+              elif any($items[]; . == "success") then "success"
+              elif any($items[]; . == "failure") then "failure"
+              elif any($items[]; . == "cancelled") then "cancelled"
+              else "skipped"
+              end;
+            (publisher_results) as $publishers
+            | if ($publishers | length) > 0
+              then aggregate_status($publishers)
+              else aggregate_status(results)
+              end
           ' <<< "$JARVIS_NEEDS_JSON")
 
           payload=$(jq -nc \
