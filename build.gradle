@@ -42,6 +42,12 @@ dependencies {
     //	ADempiere Core
     implementation "${baseGroupId}:base:${baseVersion}"
 	implementation "${baseGroupId}:project:${baseVersion}"
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+test {
+	useJUnitPlatform()
 }
 
 sourceSets {
